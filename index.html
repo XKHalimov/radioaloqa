@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Radioaloqa Signal Analizatori</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * {
@@ -267,6 +268,14 @@
             margin-bottom: 8px;
         }
 
+        .success-box {
+            background: rgba(16, 185, 129, 0.2);
+            border: 2px solid #10b981;
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 16px;
+        }
+
         .hidden {
             display: none;
         }
@@ -311,7 +320,7 @@
                             Client rejimi (2-kompyuter)
                         </h3>
                         <p>Server kompyuterga ulanish uchun uning ID raqamini kiriting.</p>
-                        <input type="text" id="serverIdInput" placeholder="Server ID ni kiriting (masalan: ABC-123-XYZ)">
+                        <input type="text" id="serverIdInput" placeholder="Server ID ni kiriting" style="text-transform: lowercase;">
                         <button onclick="startAsClient()" class="success">Serverga ulanish</button>
                     </div>
                 </div>
@@ -319,12 +328,20 @@
                 <div class="info-box">
                     <h4>📝 Yo'riqnoma:</h4>
                     <ol>
-                        <li>Ikkala kompyuter bitta WiFi tarmog'ida bo'lishi SHART EMAS</li>
+                        <li><strong>WiFi bir xil bo'lishi SHART EMAS!</strong> Internet orqali ishlaydi 🌍</li>
                         <li>1-kompyuterni "Server" rejimida ishga tushiring</li>
                         <li>Server ID raqamini ko'ring va 2-kompyuterga yuboring</li>
                         <li>2-kompyuterda server ID ni kiriting va ulaning</li>
-                        <li>Har ikki tarafda "Gapirish" tugmasini bosing va muloqot qiling!</li>
+                        <li>Har ikki tarafda "Gapirish" tugmasini bosing!</li>
                     </ol>
+                </div>
+
+                <div class="success-box">
+                    <h4 style="color: #10b981; margin-bottom: 8px;">✅ Haqiqiy peer-to-peer aloqa!</h4>
+                    <p style="color: #cbd5e1; font-size: 14px;">
+                        Bu dastur PeerJS texnologiyasidan foydalanadi. Server kerak emas, 
+                        istalgan ikki kompyuter internet orqali to'g'ridan-to'g'ri bog'lanadi!
+                    </p>
                 </div>
             </div>
         </div>
@@ -340,9 +357,9 @@
                     <button onclick="disconnect()" class="danger" style="width: auto; padding: 12px 24px;">Chiqish</button>
                 </div>
 
-                <!-- Connection ID Display (Only for Server) -->
+                <!-- Connection ID Display -->
                 <div id="serverIdDisplay" class="connection-id hidden">
-                    <div class="connection-id-label">📌 Sizning Server ID raqamingiz:</div>
+                    <div class="connection-id-label">📌 Sizning ID raqamingiz:</div>
                     <div class="connection-id-value">
                         <span id="serverId"></span>
                         <button onclick="copyServerId()" class="copy-btn success">Nusxalash</button>
@@ -439,58 +456,78 @@
 
     <script>
         // Global variables
+        let peer = null;
+        let conn = null;
+        let myPeerId = null;
+        let remotePeerId = null;
         let mode = null;
-        let peerId = null;
-        let serverId = null;
         let isConnected = false;
         let isTransmitting = false;
-        let remoteTransmitting = false;
         
         let audioContext = null;
         let analyser = null;
         let micStream = null;
-        let peerConnection = null;
-        let dataChannel = null;
+        let remoteStream = null;
         let animationFrame = null;
 
         let frequencyChart = null;
         let signalChart = null;
         let signalHistory = [];
 
-        // Generate unique ID
-        function generateId() {
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-            let id = '';
-            for (let i = 0; i < 3; i++) {
-                if (i > 0) id += '-';
-                for (let j = 0; j < 3; j++) {
-                    id += chars.charAt(Math.floor(Math.random() * chars.length));
-                }
-            }
-            return id;
-        }
-
         // Start as Server
         function startAsServer() {
             mode = 'server';
-            serverId = generateId();
             
             document.getElementById('modeSelector').classList.add('hidden');
             document.getElementById('mainApp').classList.remove('hidden');
             document.getElementById('modeTitle').textContent = 'Server Rejimi';
             
-            document.getElementById('serverIdDisplay').classList.remove('hidden');
-            document.getElementById('serverId').textContent = serverId;
+            updateStatus('🟡', 'PeerJS serverga ulanilmoqda...');
             
-            updateStatus('🟡', 'Client kutilmoqda...');
+            // Create peer with random ID
+            peer = new Peer({
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            });
             
-            setupWebRTC();
+            peer.on('open', (id) => {
+                myPeerId = id;
+                document.getElementById('serverIdDisplay').classList.remove('hidden');
+                document.getElementById('serverId').textContent = id;
+                updateStatus('🟢', 'Client kutilmoqda... ID: ' + id);
+                console.log('Mening Peer ID:', id);
+            });
+            
+            peer.on('connection', (connection) => {
+                conn = connection;
+                setupConnection();
+                updateStatus('✅', 'Client ulandi!');
+            });
+
+            peer.on('call', (call) => {
+                console.log('Call qabul qilindi');
+                // Answer the call with empty stream first
+                call.answer();
+                
+                call.on('stream', (remoteStreamData) => {
+                    remoteStream = remoteStreamData;
+                    const audioEl = document.getElementById('remoteAudio');
+                    audioEl.srcObject = remoteStreamData;
+                    audioEl.play().catch(e => console.log('Audio play xatosi:', e));
+                    console.log('Remote stream qabul qilindi va ijro etilmoqda');
+                });
+            });
+            
+            peer.on('error', (err) => {
+                console.error('Peer xatosi:', err);
+                alert('❌ Ulanishda xato: ' + err.type);
+            });
+            
             initCharts();
-            
-            // Simulate client connection after 3 seconds (for demo)
-            setTimeout(() => {
-                simulateConnection();
-            }, 3000);
         }
 
         // Start as Client
@@ -503,67 +540,76 @@
             }
             
             mode = 'client';
-            peerId = generateId();
-            serverId = serverIdInput;
+            remotePeerId = serverIdInput;
             
             document.getElementById('modeSelector').classList.add('hidden');
             document.getElementById('mainApp').classList.remove('hidden');
             document.getElementById('modeTitle').textContent = 'Client Rejimi';
             
-            updateStatus('🟡', 'Serverga ulanilmoqda...');
+            updateStatus('🟡', 'PeerJS serverga ulanilmoqda...');
             
-            setupWebRTC();
+            // Create peer
+            peer = new Peer({
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            });
+            
+            peer.on('open', (id) => {
+                myPeerId = id;
+                console.log('Mening Peer ID:', id);
+                updateStatus('🟡', 'Serverga ulanilmoqda...');
+                
+                // Connect to server
+                conn = peer.connect(remotePeerId);
+                setupConnection();
+                
+                // Wait a bit then call server
+                setTimeout(() => {
+                    console.log('Serverga call qilinmoqda...');
+                    const call = peer.call(remotePeerId, new MediaStream());
+                    
+                    call.on('stream', (remoteStreamData) => {
+                        remoteStream = remoteStreamData;
+                        const audioEl = document.getElementById('remoteAudio');
+                        audioEl.srcObject = remoteStreamData;
+                        audioEl.play().catch(e => console.log('Audio play xatosi:', e));
+                        console.log('Remote stream qabul qilindi va ijro etilmoqda');
+                    });
+                }, 1000);
+            });
+            
+            peer.on('error', (err) => {
+                console.error('Peer xatosi:', err);
+                alert('❌ Ulanishda xato: ' + err.type + '\n\nServer ID ni tekshiring!');
+                disconnect();
+            });
+            
             initCharts();
-            
-            // Simulate connection
-            setTimeout(() => {
-                simulateConnection();
-            }, 2000);
         }
 
-        // Simulate Connection (for demo purposes)
-        function simulateConnection() {
-            isConnected = true;
-            updateStatus('✅', mode === 'server' ? 'Client ulandi!' : 'Serverga ulandi!');
-            document.getElementById('startBtn').disabled = false;
-            document.getElementById('statsContainer').classList.remove('hidden');
-        }
-
-        // Setup WebRTC
-        function setupWebRTC() {
-            const config = {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' }
-                ]
-            };
+        // Setup Connection
+        function setupConnection() {
+            conn.on('open', () => {
+                isConnected = true;
+                updateStatus('✅', mode === 'server' ? 'Client ulandi!' : 'Serverga ulandi!');
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('statsContainer').classList.remove('hidden');
+                console.log('Data connection ochildi');
+            });
             
-            peerConnection = new RTCPeerConnection(config);
-            
-            if (mode === 'server') {
-                dataChannel = peerConnection.createDataChannel('signalData');
-                setupDataChannel();
-            } else {
-                peerConnection.ondatachannel = (event) => {
-                    dataChannel = event.channel;
-                    setupDataChannel();
-                };
-            }
-            
-            peerConnection.ontrack = (event) => {
-                document.getElementById('remoteAudio').srcObject = event.streams[0];
-            };
-        }
-
-        // Setup Data Channel
-        function setupDataChannel() {
-            dataChannel.onopen = () => {
-                console.log('Data channel opened');
-            };
-            
-            dataChannel.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+            conn.on('data', (data) => {
                 handleRemoteData(data);
-            };
+            });
+            
+            conn.on('close', () => {
+                isConnected = false;
+                updateStatus('❌', 'Aloqa uzildi');
+                document.getElementById('startBtn').disabled = true;
+            });
         }
 
         // Handle Remote Data
@@ -573,7 +619,6 @@
                 document.getElementById('remoteSignal').textContent = data.signalStrength.toFixed(1) + ' dB';
                 document.getElementById('remoteSignal').style.color = getSignalColor(data.signalStrength);
                 
-                remoteTransmitting = data.isTransmitting;
                 document.getElementById('remoteStatus').textContent = data.isTransmitting ? '🎤 Gapirmoqda' : '🔇 Tinch';
                 document.getElementById('remoteStatus').style.color = data.isTransmitting ? '#10b981' : '#64748b';
             }
@@ -581,8 +626,8 @@
 
         // Send Signal Data
         function sendSignalData(data) {
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify(data));
+            if (conn && conn.open) {
+                conn.send(data);
             }
         }
 
@@ -594,6 +639,7 @@
             }
 
             try {
+                // Get microphone stream
                 micStream = await navigator.mediaDevices.getUserMedia({ 
                     audio: {
                         echoCancellation: true,
@@ -602,6 +648,23 @@
                     } 
                 });
                 
+                console.log('Mikrofon olindi, ovozli call boshlanmoqda...');
+                
+                // Send audio to remote peer
+                if (peer) {
+                    const call = peer.call(remotePeerId || conn.peer, micStream);
+                    
+                    if (call) {
+                        call.on('stream', (remoteStreamData) => {
+                            const audioEl = document.getElementById('remoteAudio');
+                            audioEl.srcObject = remoteStreamData;
+                            audioEl.play().catch(e => console.log('Audio play xatosi:', e));
+                            console.log('Qarshi tomondan ovoz kelmoqda');
+                        });
+                    }
+                }
+                
+                // Setup audio analysis
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioContext.createAnalyser();
                 analyser.fftSize = 2048;
@@ -610,12 +673,6 @@
                 const source = audioContext.createMediaStreamSource(micStream);
                 source.connect(analyser);
                 
-                if (peerConnection) {
-                    micStream.getTracks().forEach(track => {
-                        peerConnection.addTrack(track, micStream);
-                    });
-                }
-                
                 isTransmitting = true;
                 document.getElementById('startBtn').disabled = true;
                 document.getElementById('stopBtn').disabled = false;
@@ -623,20 +680,21 @@
                 analyzeAudio();
             } catch (err) {
                 console.error('Mikrofon xatosi:', err);
-                alert('❌ Mikrofondan foydalanishda xato yuz berdi!');
+                alert('❌ Mikrofondan foydalanishda xato yuz berdi!\n\n' + err.message);
             }
         }
 
         // Stop Transmission
         function stopTransmission() {
-            if (micStream) {
-                micStream.getTracks().forEach(track => track.stop());
-                micStream = null;
-            }
-            
             if (animationFrame) {
                 cancelAnimationFrame(animationFrame);
                 animationFrame = null;
+            }
+            
+            // Stop microphone
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
             }
             
             isTransmitting = false;
@@ -728,7 +786,7 @@
             document.getElementById('statusText').textContent = text;
             
             const statusBox = document.getElementById('statusBox');
-            if (icon === '✅') {
+            if (icon === '✅' || icon === '🟢') {
                 statusBox.classList.remove('status-disconnected');
                 statusBox.classList.add('status-connected');
             } else {
@@ -741,7 +799,9 @@
         function copyServerId() {
             const id = document.getElementById('serverId').textContent;
             navigator.clipboard.writeText(id).then(() => {
-                alert('✅ Server ID nusxalandi: ' + id);
+                alert('✅ Server ID nusxalandi:\n\n' + id + '\n\nEndi buni ikkinchi kompyuterga yuboring!');
+            }).catch(() => {
+                prompt('ID ni nusxalang:', id);
             });
         }
 
@@ -749,117 +809,21 @@
         function disconnect() {
             stopTransmission();
             
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
+            if (conn) {
+                conn.close();
+                conn = null;
+            }
+            
+            if (peer) {
+                peer.destroy();
+                peer = null;
+            }
+            
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
             }
             
             if (audioContext) {
                 audioContext.close();
-                audioContext = null;
-            }
-            
-            isConnected = false;
-            mode = null;
-            
-            document.getElementById('mainApp').classList.add('hidden');
-            document.getElementById('modeSelector').classList.remove('hidden');
-            document.getElementById('serverIdDisplay').classList.add('hidden');
-            document.getElementById('statsContainer').classList.add('hidden');
-        }
-
-        // Initialize Charts
-        function initCharts() {
-            const freqCtx = document.getElementById('frequencyChart').getContext('2d');
-            frequencyChart = new Chart(freqCtx, {
-                type: 'bar',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Amplituda',
-                        data: [],
-                        backgroundColor: '#3b82f6'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
-                        x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
-                    },
-                    plugins: {
-                        legend: { display: false }
-                    }
-                }
-            });
-
-            const signalCtx = document.getElementById('signalChart').getContext('2d');
-            signalChart = new Chart(signalCtx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [
-                        {
-                            label: 'Signal',
-                            data: [],
-                            borderColor: '#10b981',
-                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                            tension: 0.4
-                        },
-                        {
-                            label: 'SNR',
-                            data: [],
-                            borderColor: '#8b5cf6',
-                            backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                            tension: 0.4
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
-                        x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
-                    },
-                    plugins: {
-                        legend: { labels: { color: '#94a3b8' } }
-                    }
-                }
-            });
-        }
-
-        // Update Frequency Chart
-        function updateFrequencyChart(dataArray, nyquist, bufferLength) {
-            const labels = [];
-            const data = [];
-            const step = Math.floor(bufferLength / 50);
-            
-            for (let i = 0; i < 50; i++) {
-                const index = i * step;
-                const freq = (index * nyquist) / bufferLength;
-                labels.push(Math.round(freq));
-                data.push(dataArray[index]);
-            }
-            
-            frequencyChart.data.labels = labels;
-            frequencyChart.data.datasets[0].data = data;
-            frequencyChart.update('none');
-        }
-
-        // Update Signal Chart
-        function updateSignalChart(signal, snr) {
-            const now = new Date().toLocaleTimeString();
-            
-            signalHistory.push({ time: now, signal, snr });
-            if (signalHistory.length > 50) signalHistory.shift();
-            
-            signalChart.data.labels = signalHistory.map(h => h.time);
-            signalChart.data.datasets[0].data = signalHistory.map(h => h.signal);
-            signalChart.data.datasets[1].data = signalHistory.map(h => h.snr);
-            signalChart.update('none');
-        }
-    </script>
-</body>
-</html>
+                audioContext = null;}}
