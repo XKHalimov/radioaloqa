@@ -42,11 +42,6 @@
         margin-bottom: 5px;
       }
 
-      .header p {
-        opacity: 0.9;
-        font-size: 14px;
-      }
-
       .content {
         padding: 30px;
       }
@@ -78,19 +73,9 @@
         color: white;
       }
 
-      .btn-primary:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-      }
-
       .btn-success {
         background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         color: white;
-      }
-
-      .btn-success:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 20px rgba(56, 239, 125, 0.4);
       }
 
       .btn-danger {
@@ -103,6 +88,11 @@
         color: white;
       }
 
+      button:hover {
+        transform: translateY(-2px);
+        opacity: 0.9;
+      }
+
       input {
         padding: 12px 20px;
         font-size: 16px;
@@ -111,12 +101,6 @@
         width: 100%;
         max-width: 400px;
         margin: 10px 0;
-        transition: border 0.3s;
-      }
-
-      input:focus {
-        outline: none;
-        border-color: #667eea;
       }
 
       .room-info {
@@ -172,14 +156,14 @@
         font-size: 12px;
         display: flex;
         align-items: center;
-        gap: 5px;
+        gap: 8px;
       }
 
       .audio-indicator {
         display: flex;
         gap: 2px;
         align-items: flex-end;
-        height: 20px;
+        height: 16px;
       }
 
       .audio-bar {
@@ -204,24 +188,21 @@
 
       .connection-excellent {
         background: rgba(56, 239, 125, 0.9);
-        color: white;
       }
 
       .connection-good {
         background: rgba(255, 193, 7, 0.9);
-        color: white;
       }
 
       .connection-poor {
         background: rgba(235, 51, 73, 0.9);
-        color: white;
       }
 
       .connection-dot {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: currentColor;
+        background: white;
         animation: pulse 2s infinite;
       }
 
@@ -267,10 +248,10 @@
         font-size: 14px;
       }
 
-      .message.own {
-        background: #667eea;
-        color: white;
-        margin-left: 20%;
+      .message.system {
+        background: #fff3cd;
+        color: #856404;
+        text-align: center;
       }
 
       .chat-input {
@@ -283,35 +264,6 @@
         margin: 0;
       }
 
-      .participants {
-        background: #f8f9fa;
-        padding: 15px;
-        border-radius: 10px;
-        margin-top: 15px;
-      }
-
-      .participants h3 {
-        margin-bottom: 10px;
-        color: #667eea;
-      }
-
-      .participant {
-        background: white;
-        padding: 10px;
-        border-radius: 5px;
-        margin: 5px 0;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .status-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #38ef7d;
-      }
-
       .hidden {
         display: none;
       }
@@ -321,7 +273,7 @@
     <div class="container">
       <div class="header">
         <h1>🎥 Video Chat Platform</h1>
-        <p>Real-time video conferencing va ekran ulashish</p>
+        <p>Real-time video conferencing</p>
       </div>
 
       <div class="content">
@@ -379,11 +331,6 @@
         </div>
 
         <div id="videoSection" class="video-section">
-          <div class="participants">
-            <h3>👥 Ishtirokchilar (<span id="participantCount">0</span>)</h3>
-            <div id="participantsList"></div>
-          </div>
-
           <div class="video-grid" id="videoGrid">
             <div class="video-container">
               <video id="localVideo" autoplay muted playsinline></video>
@@ -426,7 +373,7 @@
               id="shareScreen"
               onclick="shareScreen()"
             >
-              🖥️ Ekran Ulashish
+              🖥️ Ekran
             </button>
             <button class="btn-danger" onclick="leaveCall()">📞 Chiqish</button>
           </div>
@@ -450,23 +397,90 @@
       </div>
     </div>
 
+    <!-- Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
     <script>
+      // SERVERINGIZ URL ini kiriting (masalan: https://yourserver.com yoki http://localhost:3000)
+      const SERVER_URL = window.location.origin;
+
+      let socket = io(SERVER_URL);
       let localStream = null;
       let screenStream = null;
       let roomId = null;
       let username = "User";
       let videoEnabled = true;
       let audioEnabled = true;
-      let participants = new Map();
+      let peers = {};
       let audioContext = null;
       let analyser = null;
+      let audioAnalyzers = {};
 
+      const configuration = {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
+      };
+
+      // URL dan room ID olish
       const urlParams = new URLSearchParams(window.location.search);
       const urlRoomId = urlParams.get("room");
       if (urlRoomId) {
         document.getElementById("roomIdInput").value = urlRoomId;
         showJoinSection();
       }
+
+      // Socket events
+      socket.on("user-joined", async ({ socketId, username: newUsername }) => {
+        addChatMessage("Tizim", `${newUsername} qo'shildi`, true);
+        await createPeerConnection(socketId, true, newUsername);
+      });
+
+      socket.on("existing-users", async (users) => {
+        for (const user of users) {
+          await createPeerConnection(user.socketId, false, user.username);
+        }
+      });
+
+      socket.on("offer", async ({ from, offer }) => {
+        if (!peers[from]) return;
+        await peers[from].pc.setRemoteDescription(
+          new RTCSessionDescription(offer)
+        );
+        const answer = await peers[from].pc.createAnswer();
+        await peers[from].pc.setLocalDescription(answer);
+        socket.emit("answer", { to: from, answer });
+      });
+
+      socket.on("answer", async ({ from, answer }) => {
+        if (!peers[from]) return;
+        await peers[from].pc.setRemoteDescription(
+          new RTCSessionDescription(answer)
+        );
+      });
+
+      socket.on("ice-candidate", async ({ from, candidate }) => {
+        if (!peers[from]) return;
+        await peers[from].pc.addIceCandidate(new RTCIceCandidate(candidate));
+      });
+
+      socket.on("chat-message", ({ username: sender, message }) => {
+        addChatMessage(sender, message);
+      });
+
+      socket.on("user-left", ({ socketId, username: leftUsername }) => {
+        addChatMessage("Tizim", `${leftUsername} chiqdi`, true);
+        removeRemoteVideo(socketId);
+        if (peers[socketId]) {
+          peers[socketId].pc.close();
+          delete peers[socketId];
+        }
+      });
+
+      socket.on("user-quality-update", ({ socketId, quality }) => {
+        updateRemoteConnectionQuality(socketId, quality);
+      });
 
       function generateRoomId() {
         return Math.random().toString(36).substring(2, 10);
@@ -478,8 +492,6 @@
           window.location.origin + window.location.pathname + "?room=" + roomId;
         document.getElementById("roomLink").textContent = link;
         document.getElementById("roomInfo").classList.remove("hidden");
-
-        addChatMessage("Tizim", "Xona yaratildi! Linkni ulashing.");
       }
 
       function showJoinSection() {
@@ -516,12 +528,95 @@
           document.getElementById("videoSection").style.display = "block";
 
           setupAudioAnalyzer();
-          addParticipant(username, true);
-          addChatMessage("Tizim", `${username} xonaga qo'shildi`);
-
+          socket.emit("join-room", { roomId, username });
+          addChatMessage("Tizim", `Siz xonaga qo'shildingiz`, true);
           startConnectionMonitoring();
         } catch (error) {
-          alert("Kamera yoki mikrofonga kirishda xatolik: " + error.message);
+          alert("Kamera/mikrofon xatoligi: " + error.message);
+        }
+      }
+
+      async function createPeerConnection(
+        socketId,
+        isInitiator,
+        remoteUsername
+      ) {
+        const pc = new RTCPeerConnection(configuration);
+        peers[socketId] = { pc, username: remoteUsername };
+
+        localStream.getTracks().forEach((track) => {
+          pc.addTrack(track, localStream);
+        });
+
+        pc.ontrack = (event) => {
+          addRemoteVideo(socketId, event.streams[0], remoteUsername);
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit("ice-candidate", {
+              to: socketId,
+              candidate: event.candidate,
+            });
+          }
+        };
+
+        if (isInitiator) {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit("offer", { to: socketId, offer });
+        }
+      }
+
+      function addRemoteVideo(socketId, stream, remoteUsername) {
+        let container = document.getElementById("remote-" + socketId);
+
+        if (!container) {
+          container = document.createElement("div");
+          container.id = "remote-" + socketId;
+          container.className = "video-container";
+
+          const video = document.createElement("video");
+          video.autoplay = true;
+          video.playsinline = true;
+          video.srcObject = stream;
+
+          const label = document.createElement("div");
+          label.className = "video-label";
+          label.innerHTML = `
+                    <span>${remoteUsername}</span>
+                    <div class="audio-indicator" id="audio-${socketId}">
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                    </div>
+                `;
+
+          const badge = document.createElement("div");
+          badge.className = "connection-badge connection-excellent";
+          badge.id = "conn-" + socketId;
+          badge.innerHTML = `
+                    <div class="connection-dot"></div>
+                    <span>Yaxshi</span>
+                `;
+
+          container.appendChild(video);
+          container.appendChild(label);
+          container.appendChild(badge);
+          document.getElementById("videoGrid").appendChild(container);
+
+          setupRemoteAudioAnalyzer(socketId, stream);
+        }
+      }
+
+      function removeRemoteVideo(socketId) {
+        const container = document.getElementById("remote-" + socketId);
+        if (container) {
+          container.remove();
+        }
+        if (audioAnalyzers[socketId]) {
+          delete audioAnalyzers[socketId];
         }
       }
 
@@ -532,10 +627,25 @@
         source.connect(analyser);
         analyser.fftSize = 256;
 
-        updateAudioLevel();
+        updateLocalAudioLevel();
       }
 
-      function updateAudioLevel() {
+      function setupRemoteAudioAnalyzer(socketId, stream) {
+        if (!audioContext) {
+          audioContext = new (window.AudioContext ||
+            window.webkitAudioContext)();
+        }
+
+        const remoteAnalyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(remoteAnalyser);
+        remoteAnalyser.fftSize = 256;
+
+        audioAnalyzers[socketId] = remoteAnalyser;
+        updateRemoteAudioLevel(socketId);
+      }
+
+      function updateLocalAudioLevel() {
         if (!analyser) return;
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -547,9 +657,31 @@
         const bars = document.querySelectorAll(
           "#localAudioIndicator .audio-bar"
         );
+        updateAudioBars(bars, normalizedLevel);
+
+        requestAnimationFrame(updateLocalAudioLevel);
+      }
+
+      function updateRemoteAudioLevel(socketId) {
+        const remoteAnalyser = audioAnalyzers[socketId];
+        if (!remoteAnalyser) return;
+
+        const dataArray = new Uint8Array(remoteAnalyser.frequencyBinCount);
+        remoteAnalyser.getByteFrequencyData(dataArray);
+
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        const normalizedLevel = Math.min(100, average * 2);
+
+        const bars = document.querySelectorAll(`#audio-${socketId} .audio-bar`);
+        updateAudioBars(bars, normalizedLevel);
+
+        requestAnimationFrame(() => updateRemoteAudioLevel(socketId));
+      }
+
+      function updateAudioBars(bars, level) {
         bars.forEach((bar, index) => {
           const threshold = (index + 1) * 25;
-          if (normalizedLevel > threshold) {
+          if (level > threshold) {
             bar.style.height = `${10 + index * 3}px`;
             bar.style.opacity = "1";
           } else {
@@ -557,8 +689,6 @@
             bar.style.opacity = "0.3";
           }
         });
-
-        requestAnimationFrame(updateAudioLevel);
       }
 
       function startConnectionMonitoring() {
@@ -567,41 +697,46 @@
           let quality, className;
 
           if (random > 0.7) {
-            quality = "Yaxshi";
+            quality = "yaxshi";
             className = "connection-excellent";
           } else if (random > 0.3) {
-            quality = "O'rtacha";
+            quality = "ortacha";
             className = "connection-good";
           } else {
-            quality = "Zaif";
+            quality = "zaif";
             className = "connection-poor";
           }
 
           const badge = document.getElementById("localConnection");
           badge.className = `connection-badge ${className}`;
-          badge.querySelector("span").textContent = quality;
-        }, 3000);
+          badge.querySelector("span").textContent =
+            quality === "yaxshi"
+              ? "Yaxshi"
+              : quality === "ortacha"
+              ? "O'rtacha"
+              : "Zaif";
+
+          socket.emit("connection-quality", { roomId, quality });
+        }, 5000);
       }
 
-      function addParticipant(name, isLocal) {
-        participants.set(name, { name, isLocal });
-        updateParticipantsList();
-      }
+      function updateRemoteConnectionQuality(socketId, quality) {
+        const badge = document.getElementById("conn-" + socketId);
+        if (!badge) return;
 
-      function updateParticipantsList() {
-        const list = document.getElementById("participantsList");
-        list.innerHTML = "";
-        participants.forEach((participant, name) => {
-          const div = document.createElement("div");
-          div.className = "participant";
-          div.innerHTML = `
-                    <span class="status-dot"></span>
-                    <span>${name}${participant.isLocal ? " (Siz)" : ""}</span>
-                `;
-          list.appendChild(div);
-        });
-        document.getElementById("participantCount").textContent =
-          participants.size;
+        let className = "connection-excellent";
+        let text = "Yaxshi";
+
+        if (quality === "ortacha") {
+          className = "connection-good";
+          text = "O'rtacha";
+        } else if (quality === "zaif") {
+          className = "connection-poor";
+          text = "Zaif";
+        }
+
+        badge.className = `connection-badge ${className}`;
+        badge.querySelector("span").textContent = text;
       }
 
       function toggleVideo() {
@@ -609,7 +744,7 @@
         localStream.getVideoTracks()[0].enabled = videoEnabled;
         document.getElementById("toggleVideo").textContent = videoEnabled
           ? "📹 Video"
-          : "📹 Video (O'chiq)";
+          : "📹 O'chiq";
       }
 
       function toggleAudio() {
@@ -617,7 +752,7 @@
         localStream.getAudioTracks()[0].enabled = audioEnabled;
         document.getElementById("toggleAudio").textContent = audioEnabled
           ? "🎤 Audio"
-          : "🎤 Audio (O'chiq)";
+          : "🎤 O'chiq";
       }
 
       async function shareScreen() {
@@ -629,11 +764,29 @@
 
           const videoTrack = screenStream.getVideoTracks()[0];
           document.getElementById("localVideo").srcObject = screenStream;
-          addChatMessage("Tizim", "Ekran ulashish boshlandi");
+
+          Object.values(peers).forEach(({ pc }) => {
+            const sender = pc
+              .getSenders()
+              .find((s) => s.track.kind === "video");
+            if (sender) {
+              sender.replaceTrack(videoTrack);
+            }
+          });
+
+          addChatMessage("Tizim", "Ekran ulashish boshlandi", true);
 
           videoTrack.onended = () => {
             document.getElementById("localVideo").srcObject = localStream;
-            addChatMessage("Tizim", "Ekran ulashish to'xtatildi");
+            Object.values(peers).forEach(({ pc }) => {
+              const sender = pc
+                .getSenders()
+                .find((s) => s.track.kind === "video");
+              if (sender) {
+                sender.replaceTrack(localStream.getVideoTracks()[0]);
+              }
+            });
+            addChatMessage("Tizim", "Ekran ulashish to'xtatildi", true);
           };
         } catch (error) {
           alert("Ekran ulashishda xatolik: " + error.message);
@@ -645,15 +798,15 @@
         const message = input.value.trim();
 
         if (message) {
-          addChatMessage(username, message, true);
+          socket.emit("chat-message", { roomId, username, message });
           input.value = "";
         }
       }
 
-      function addChatMessage(sender, message, isOwn = false) {
+      function addChatMessage(sender, message, isSystem = false) {
         const chatMessages = document.getElementById("chatMessages");
         const messageDiv = document.createElement("div");
-        messageDiv.className = "message" + (isOwn ? " own" : "");
+        messageDiv.className = isSystem ? "message system" : "message";
         messageDiv.innerHTML = `<strong>${sender}:</strong> ${message}`;
         chatMessages.appendChild(messageDiv);
         chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -675,6 +828,8 @@
         if (audioContext) {
           audioContext.close();
         }
+        Object.values(peers).forEach(({ pc }) => pc.close());
+        socket.disconnect();
         location.reload();
       }
     </script>
